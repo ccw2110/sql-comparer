@@ -1,85 +1,100 @@
-const sql = require('mssql/msnodesqlv8');
+const sql = require('msnodesqlv8');
 
 // Configuration for the source and target databases
 const sourceConfig = {
-  user: "sa",
-  password: "Sistemas2017",
-  database: "AlconDB",
-  //server: "LAPTOP-HN2EMTCC\\MSSQLSERVER2017",
-  server: "LAPTOP-HN2EMTCC\\MSSQLSERVER2017",
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000
-  },
-  options: {
-    encrypt: false, // for azure
-    trustServerCertificate: false // change to true for local dev / self-signed certs
-  }
+  connectionString: 'Driver={SQL Server Native Client 11.0};Server={LAPTOP-HN2EMTCC\\MSSQLSERVER2017};Database={AlconDB};Uid={sa};Pwd=Sistemas2017;'
 };
 
 const targetConfig = {
-  user: "sa",
-  password: "Sistemas2017",
-  database: "Alcon_Integracion",
-  //server: "LAPTOP-HN2EMTCC\\MSSQLSERVER2017",
-  server: "LAPTOP-HN2EMTCC\\MSSQLSERVER2017",
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000
-  },
-  options: {
-    encrypt: false, // for azure
-    trustServerCertificate: false // change to true for local dev / self-signed certs
-  }
+  connectionString: 'Driver={SQL Server Native Client 11.0};Server={LAPTOP-HN2EMTCC\\MSSQLSERVER2017};Database={AlconDB_Prod};Uid={sa};Pwd=Sistemas2017;'
 };
 
 async function fetchSchema(config) {
-  const pool = await sql.connect(config);
+  const queryTables = `
+    SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE 
+    FROM INFORMATION_SCHEMA.COLUMNS
+  `;
 
-  const tables = await pool.request().query(`
-    SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'
-  `);
-console.log(tables)
-  const functions = await pool.request().query(`
-    SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION'
-  `);
+  const queryFunctions = `
+    SELECT ROUTINE_NAME, ROUTINE_DEFINITION
+    FROM INFORMATION_SCHEMA.ROUTINES 
+    WHERE ROUTINE_TYPE = 'FUNCTION'
+  `;
 
-  const procedures = await pool.request().query(`
-    SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE'
-  `);
+  const queryProcedures = `
+    SELECT ROUTINE_NAME, ROUTINE_DEFINITION
+    FROM INFORMATION_SCHEMA.ROUTINES 
+    WHERE ROUTINE_TYPE = 'PROCEDURE'
+  `;
 
-  return {
-    tables: tables.recordset.map(row => row.TABLE_NAME),
-    functions: functions.recordset.map(row => row.ROUTINE_NAME),
-    procedures: procedures.recordset.map(row => row.ROUTINE_NAME),
-  };
+  return new Promise((resolve, reject) => {
+    sql.query(config.connectionString, queryTables, (err, tables) => {
+      if (err) return reject(err);
+
+      sql.query(config.connectionString, queryFunctions, (err, functions) => {
+        if (err) return reject(err);
+
+        sql.query(config.connectionString, queryProcedures, (err, procedures) => {
+          if (err) return reject(err);
+
+          resolve({
+            tables: tables.reduce((acc, row) => {
+              if (!acc[row.TABLE_NAME]) acc[row.TABLE_NAME] = [];
+              acc[row.TABLE_NAME].push({ column: row.COLUMN_NAME, type: row.DATA_TYPE });
+              return acc;
+            }, {}),
+            functions: functions.reduce((acc, row) => {
+              acc[row.ROUTINE_NAME] = row.ROUTINE_DEFINITION;
+              return acc;
+            }, {}),
+            procedures: procedures.reduce((acc, row) => {
+              acc[row.ROUTINE_NAME] = row.ROUTINE_DEFINITION;
+              return acc;
+            }, {}),
+          });
+        });
+      });
+    });
+  });
 }
 
 function compareSchemas(sourceSchema, targetSchema) {
   const createOrAlterScripts = [];
 
   // Compare tables
-  sourceSchema.tables.forEach(table => {
-    if (!targetSchema.tables.includes(table)) {
-      createOrAlterScripts.push(`-- Script to create table ${table}`);
+  for (const table in sourceSchema.tables) {
+    if (!targetSchema.tables[table]) {
+      createOrAlterScripts.push(`-- Create table ${table}`);
+      createOrAlterScripts.push(`CREATE TABLE ${table} (...)`); // Simplified for brevity
+    } else {
+      const sourceColumns = sourceSchema.tables[table];
+      const targetColumns = targetSchema.tables[table];
+
+      sourceColumns.forEach(column => {
+        const targetColumn = targetColumns.find(c => c.column === column.column);
+        if (!targetColumn || targetColumn.type !== column.type) {
+          createOrAlterScripts.push(`-- Alter table ${table} column ${column.column}`);
+          createOrAlterScripts.push(`ALTER TABLE ${table} ALTER COLUMN ${column.column} ${column.type};`);
+        }
+      });
     }
-  });
+  }
 
   // Compare functions
-  sourceSchema.functions.forEach(func => {
-    if (!targetSchema.functions.includes(func)) {
-      createOrAlterScripts.push(`-- Script to create function ${func}`);
+  for (const func in sourceSchema.functions) {
+    if (!targetSchema.functions[func] || targetSchema.functions[func] !== sourceSchema.functions[func]) {
+      createOrAlterScripts.push(`-- Create or alter function ${func}`);
+      createOrAlterScripts.push(sourceSchema.functions[func]); // Simplified for brevity
     }
-  });
+  }
 
   // Compare procedures
-  sourceSchema.procedures.forEach(proc => {
-    if (!targetSchema.procedures.includes(proc)) {
-      createOrAlterScripts.push(`-- Script to create procedure ${proc}`);
+  for (const proc in sourceSchema.procedures) {
+    if (!targetSchema.procedures[proc] || targetSchema.procedures[proc] !== sourceSchema.procedures[proc]) {
+      createOrAlterScripts.push(`-- Create or alter procedure ${proc}`);
+      createOrAlterScripts.push(sourceSchema.procedures[proc]); // Simplified for brevity
     }
-  });
+  }
 
   return createOrAlterScripts.join('\n');
 }
@@ -94,7 +109,5 @@ function compareSchemas(sourceSchema, targetSchema) {
     console.log(script);
   } catch (err) {
     console.error('Error comparing schemas:', err);
-  } finally {
-    sql.close();
   }
 })();
