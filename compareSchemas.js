@@ -2,11 +2,11 @@ const sql = require('msnodesqlv8');
 
 // Configuration for the source and target databases
 const sourceConfig = {
-  connectionString: 'Driver={SQL Server Native Client 11.0};Server={LAPTOP-HN2EMTCC\\MSSQLSERVER2017};Database={AlconDB};Uid={sa};Pwd=Sistemas2017;'
+  connectionString: 'Driver={SQL Server Native Client 11.0};Server={sourceServer};Database={sourceDatabase};Trusted_Connection={yes};'
 };
 
 const targetConfig = {
-  connectionString: 'Driver={SQL Server Native Client 11.0};Server={LAPTOP-HN2EMTCC\\MSSQLSERVER2017};Database={AlconDB_Prod};Uid={sa};Pwd=Sistemas2017;'
+  connectionString: 'Driver={SQL Server Native Client 11.0};Server={targetServer};Database={targetDatabase};Trusted_Connection={yes};'
 };
 
 async function fetchSchema(config) {
@@ -59,14 +59,17 @@ async function fetchSchema(config) {
 }
 
 function compareSchemas(sourceSchema, targetSchema) {
-  const resultScripts = [];
+  const resultArray = [];
 
   // Compare tables
   for (const table in sourceSchema.tables) {
-    resultScripts.push(`-- Table: ${table}`);
     if (!targetSchema.tables[table]) {
-      resultScripts.push(`-- Table ${table} does not exist in target schema`);
-      resultScripts.push(`CREATE TABLE ${table} (...);`); // Simplified for brevity
+      resultArray.push([
+        `Table: ${table}`,
+        `CREATE TABLE ${table} (...);`, // Simplified for brevity
+        JSON.stringify(sourceSchema.tables[table], null, 2),
+        'Table does not exist in target schema'
+      ]);
     } else {
       const sourceColumns = sourceSchema.tables[table];
       const targetColumns = targetSchema.tables[table];
@@ -74,54 +77,63 @@ function compareSchemas(sourceSchema, targetSchema) {
       sourceColumns.forEach(column => {
         const targetColumn = targetColumns.find(c => c.column === column.column);
         if (!targetColumn) {
-          resultScripts.push(`-- Column ${column.column} does not exist in target table ${table}`);
-          resultScripts.push(`ALTER TABLE ${table} ADD COLUMN ${column.column} ${column.type};`);
+          resultArray.push([
+            `Column: ${column.column} in Table: ${table}`,
+            `ALTER TABLE ${table} ADD COLUMN ${column.column} ${column.type};`,
+            JSON.stringify(column, null, 2),
+            'Column does not exist in target table'
+          ]);
         } else if (targetColumn.type !== column.type) {
-          resultScripts.push(`-- Column ${column.column} in table ${table} differs`);
-          resultScripts.push(`-- Source: ${column.column} ${column.type}`);
-          resultScripts.push(`-- Target: ${targetColumn.column} ${targetColumn.type}`);
-          resultScripts.push(`ALTER TABLE ${table} ALTER COLUMN ${column.column} ${column.type};`);
+          resultArray.push([
+            `Column: ${column.column} in Table: ${table}`,
+            `ALTER TABLE ${table} ALTER COLUMN ${column.column} ${column.type};`,
+            JSON.stringify(column, null, 2),
+            JSON.stringify(targetColumn, null, 2)
+          ]);
         }
       });
     }
-    resultScripts.push(''); // Add a blank line for readability
   }
 
   // Compare functions
   for (const func in sourceSchema.functions) {
-    resultScripts.push(`-- Function: ${func}`);
     if (!targetSchema.functions[func]) {
-      resultScripts.push(`-- Function ${func} does not exist in target schema`);
-      resultScripts.push(sourceSchema.functions[func]);
+      resultArray.push([
+        `Function: ${func}`,
+        sourceSchema.functions[func],
+        sourceSchema.functions[func],
+        'Function does not exist in target schema'
+      ]);
     } else if (targetSchema.functions[func] !== sourceSchema.functions[func]) {
-      resultScripts.push(`-- Function ${func} differs`);
-      resultScripts.push(`-- Source:`);
-      resultScripts.push(sourceSchema.functions[func]);
-      resultScripts.push(`-- Target:`);
-      resultScripts.push(targetSchema.functions[func]);
-      resultScripts.push(sourceSchema.functions[func]);
+      resultArray.push([
+        `Function: ${func}`,
+        sourceSchema.functions[func],
+        sourceSchema.functions[func],
+        targetSchema.functions[func]
+      ]);
     }
-    resultScripts.push(''); // Add a blank line for readability
   }
 
   // Compare procedures
   for (const proc in sourceSchema.procedures) {
-    resultScripts.push(`-- Procedure: ${proc}`);
     if (!targetSchema.procedures[proc]) {
-      resultScripts.push(`-- Procedure ${proc} does not exist in target schema`);
-      resultScripts.push(sourceSchema.procedures[proc]);
+      resultArray.push([
+        `Procedure: ${proc}`,
+        sourceSchema.procedures[proc],
+        sourceSchema.procedures[proc],
+        'Procedure does not exist in target schema'
+      ]);
     } else if (targetSchema.procedures[proc] !== sourceSchema.procedures[proc]) {
-      resultScripts.push(`-- Procedure ${proc} differs`);
-      resultScripts.push(`-- Source:`);
-      resultScripts.push(sourceSchema.procedures[proc]);
-      resultScripts.push(`-- Target:`);
-      resultScripts.push(targetSchema.procedures[proc]);
-      resultScripts.push(sourceSchema.procedures[proc]);
+      resultArray.push([
+        `Procedure: ${proc}`,
+        sourceSchema.procedures[proc],
+        sourceSchema.procedures[proc],
+        targetSchema.procedures[proc]
+      ]);
     }
-    resultScripts.push(''); // Add a blank line for readability
   }
 
-  return resultScripts;
+  return resultArray;
 }
 
 (async () => {
@@ -131,9 +143,7 @@ function compareSchemas(sourceSchema, targetSchema) {
 
     const scriptsArray = compareSchemas(sourceSchema, targetSchema);
 
-    var jsonString = JSON.stringify(scriptsArray);
-
-    console.log(jsonString);
+    console.log(scriptsArray);
   } catch (err) {
     console.error('Error comparing schemas:', err);
   }
