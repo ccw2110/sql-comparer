@@ -59,44 +59,69 @@ async function fetchSchema(config) {
 }
 
 function compareSchemas(sourceSchema, targetSchema) {
-  const createOrAlterScripts = [];
+  const resultScripts = [];
 
   // Compare tables
   for (const table in sourceSchema.tables) {
+    resultScripts.push(`-- Table: ${table}`);
     if (!targetSchema.tables[table]) {
-      createOrAlterScripts.push(`-- Create table ${table}`);
-      createOrAlterScripts.push(`CREATE TABLE ${table} (...)`); // Simplified for brevity
+      resultScripts.push(`-- Table ${table} does not exist in target schema`);
+      resultScripts.push(`CREATE TABLE ${table} (...);`); // Simplified for brevity
     } else {
       const sourceColumns = sourceSchema.tables[table];
       const targetColumns = targetSchema.tables[table];
 
       sourceColumns.forEach(column => {
         const targetColumn = targetColumns.find(c => c.column === column.column);
-        if (!targetColumn || targetColumn.type !== column.type) {
-          createOrAlterScripts.push(`-- Alter table ${table} column ${column.column}`);
-          createOrAlterScripts.push(`ALTER TABLE ${table} ALTER COLUMN ${column.column} ${column.type};`);
+        if (!targetColumn) {
+          resultScripts.push(`-- Column ${column.column} does not exist in target table ${table}`);
+          resultScripts.push(`ALTER TABLE ${table} ADD COLUMN ${column.column} ${column.type};`);
+        } else if (targetColumn.type !== column.type) {
+          resultScripts.push(`-- Column ${column.column} in table ${table} differs`);
+          resultScripts.push(`-- Source: ${column.column} ${column.type}`);
+          resultScripts.push(`-- Target: ${targetColumn.column} ${targetColumn.type}`);
+          resultScripts.push(`ALTER TABLE ${table} ALTER COLUMN ${column.column} ${column.type};`);
         }
       });
     }
+    resultScripts.push(''); // Add a blank line for readability
   }
 
   // Compare functions
   for (const func in sourceSchema.functions) {
-    if (!targetSchema.functions[func] || targetSchema.functions[func] !== sourceSchema.functions[func]) {
-      createOrAlterScripts.push(`-- Create or alter function ${func}`);
-      createOrAlterScripts.push(sourceSchema.functions[func]); // Simplified for brevity
+    resultScripts.push(`-- Function: ${func}`);
+    if (!targetSchema.functions[func]) {
+      resultScripts.push(`-- Function ${func} does not exist in target schema`);
+      resultScripts.push(sourceSchema.functions[func]);
+    } else if (targetSchema.functions[func] !== sourceSchema.functions[func]) {
+      resultScripts.push(`-- Function ${func} differs`);
+      resultScripts.push(`-- Source:`);
+      resultScripts.push(sourceSchema.functions[func]);
+      resultScripts.push(`-- Target:`);
+      resultScripts.push(targetSchema.functions[func]);
+      resultScripts.push(sourceSchema.functions[func]);
     }
+    resultScripts.push(''); // Add a blank line for readability
   }
 
   // Compare procedures
   for (const proc in sourceSchema.procedures) {
-    if (!targetSchema.procedures[proc] || targetSchema.procedures[proc] !== sourceSchema.procedures[proc]) {
-      createOrAlterScripts.push(`-- Create or alter procedure ${proc}`);
-      createOrAlterScripts.push(sourceSchema.procedures[proc]); // Simplified for brevity
+    resultScripts.push(`-- Procedure: ${proc}`);
+    if (!targetSchema.procedures[proc]) {
+      resultScripts.push(`-- Procedure ${proc} does not exist in target schema`);
+      resultScripts.push(sourceSchema.procedures[proc]);
+    } else if (targetSchema.procedures[proc] !== sourceSchema.procedures[proc]) {
+      resultScripts.push(`-- Procedure ${proc} differs`);
+      resultScripts.push(`-- Source:`);
+      resultScripts.push(sourceSchema.procedures[proc]);
+      resultScripts.push(`-- Target:`);
+      resultScripts.push(targetSchema.procedures[proc]);
+      resultScripts.push(sourceSchema.procedures[proc]);
     }
+    resultScripts.push(''); // Add a blank line for readability
   }
 
-  return createOrAlterScripts.join('\n');
+  return resultScripts;
 }
 
 (async () => {
@@ -104,9 +129,11 @@ function compareSchemas(sourceSchema, targetSchema) {
     const sourceSchema = await fetchSchema(sourceConfig);
     const targetSchema = await fetchSchema(targetConfig);
 
-    const script = compareSchemas(sourceSchema, targetSchema);
+    const scriptsArray = compareSchemas(sourceSchema, targetSchema);
 
-    console.log(script);
+    var jsonString = JSON.stringify(scriptsArray);
+
+    console.log(jsonString);
   } catch (err) {
     console.error('Error comparing schemas:', err);
   }
